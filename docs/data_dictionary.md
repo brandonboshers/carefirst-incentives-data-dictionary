@@ -1,516 +1,580 @@
-# CareFirst Incentives JSON Data Dictionary
+# Blue Rewards Incentive Data - File Guide
 
-## About This Document
+## What Is This?
 
-This is the technical reference for the 13 JSON data files that make up the CareFirst Blue Rewards incentive data feed. Use this document to understand what each file contains, how they relate to each other, and how to combine them for reporting and analysis.
+You receive 13 data files that contain everything about your Blue Rewards incentive program. This guide explains what each file is, what the columns mean, and how to connect them together for reporting.
 
-**Companion file:** [`sql/example_queries.sql`](../sql/example_queries.sql) contains 20 ready-to-use SQL queries with detailed comments.
-
----
-
-## How the Data is Organized
-
-The 13 files form a hierarchy. Program configuration sits at the top; member activity sits at the bottom.
-
-```
-PROGRAM CONFIGURATION (what can be earned)
-  json_incentives_program_lu ─────────────── One row per program
-       │
-       ├── json_incentives_program_event_group_lu ── Groups of activities
-       │        │
-       │        └── json_incentives_program_events_lu ── Individual activities
-       │
-MEMBER ENROLLMENT (who is enrolled)
-       │
-       ├── json_programs ────────────────────── One row per member per program
-       │        │
-       │        │
-TRANSACTION HISTORY (what happened)
-       │        │
-       │        ├── json_earned_history ─────── Points awarded
-       │        ├── json_event_history ──────── Raw events (may not earn)
-       │        ├── json_redemption_history ──── Points spent
-       │        │        │
-       │        │        └── json_redemption_history_product ── Product details
-       │        │
-       │        ├── json_expiration_history ──── Points expired
-       │        └── json_manual_adjustment_history ── Admin corrections
-       │
-REWARD DETAILS (reward-level records)
-       │
-       ├── json_reward_points ───────────────── Reward instances
-       └── json_reward_alternative ──────────── Non-point rewards (co-pay, etc.)
-
-SIMPLE FLAG
-       └── json_ag_incentives ───────────────── Is incentives activated? (Y/N)
-```
-
-**The central join key is `program_id`** — it connects everything.  
-**The member join keys are `member_id` + `member_program_id`** — they connect a specific person to their enrollment and all their transactions.
+The companion file **[sql/example_queries.sql](../sql/example_queries.sql)** has 20 ready-to-run SQL queries you can copy and use immediately.
 
 ---
 
-## Common Reporting Scenarios
+## The 13 Files at a Glance
 
-| Business Question | Files to Use | Join On |
-|-------------------|-------------|---------|
-| What activities are available in each program? | program_lu + event_group_lu + events_lu | program_id, event_group_id |
-| How many members are enrolled and what are their balances? | programs + program_lu | program_id |
-| Which activities have the most participation? | earned_history + program_lu | program_id |
-| What are members redeeming for? | redemption_history + redemption_history_product | history_id + program_id |
-| Why didn't a member earn points? | event_history LEFT JOIN earned_history | history_id + program_id |
-| What is the total outstanding point liability? | programs + program_lu | program_id (filter point_balance > 0) |
-| How do different employer groups compare? | programs + program_lu | program_id (group by employer_id) |
-| What manual corrections have been made? | manual_adjustment_history + program_lu | program_id |
-| What points have expired and when? | expiration_history + program_lu | program_id |
-| Full audit trail for a member? | UNION of earned + redemption + expiration + adjustment | member_id + member_program_id |
-| What non-point rewards (co-pay reductions) were earned? | reward_alternative + reward_points | member_reward_id |
+The files fall into four categories:
 
----
+**Program Setup** — What activities are available and how many points they're worth.
 
-## File Descriptions
+| # | File Name | What It Contains |
+|---|-----------|-----------------|
+| 1 | json_incentives_program_lu | Your incentive programs (name, dates, max points) |
+| 2 | json_incentives_program_event_group_lu | Groups of activities within each program |
+| 3 | json_incentives_program_events_lu | The individual activities members can complete |
 
-### Tier 1: Program Configuration
+**Member Enrollment** — Who is in the program.
 
-These are lookup/reference files. They define the rules of the program — what can be earned, how much, and under what conditions. They contain no member data.
+| # | File Name | What It Contains |
+|---|-----------|-----------------|
+| 4 | json_programs | Each member's enrollment, current balance, and lifetime totals |
+| 5 | json_ag_incentives | Whether a member has incentives turned on (yes/no) |
 
-| File | Grain | Description |
-|------|-------|-------------|
-| json_incentives_program_lu | 1 row per program | Master program definition. Name, date range, maximum earnable points, dollar value per point, rewards provider. |
-| json_incentives_program_event_group_lu | 1 row per event group per program | Logical groupings of activities. Controls gating (one group must complete before another unlocks), repeatability, and group-level point caps. |
-| json_incentives_program_events_lu | 1 row per event per program | The individual activities a member can complete to earn. Each event belongs to exactly one event group. Defines points, reward name, earning window dates. |
+**Transaction History** — What happened (every point earned, spent, expired, or adjusted).
 
-**Relationship:** Program → has many Event Groups → each has many Events.
+| # | File Name | What It Contains |
+|---|-----------|-----------------|
+| 6 | json_earned_history | Every time a member earned points |
+| 7 | json_event_history | Every activity the system received (even if it didn't earn) |
+| 8 | json_redemption_history | Every time a member spent points |
+| 9 | json_expiration_history | Every time points expired |
+| 10 | json_manual_adjustment_history | Every manual correction by an admin |
 
-### Tier 2: Member Enrollment
+**Reward Details** — Specifics about individual rewards and marketplace products.
 
-| File | Grain | Description |
-|------|-------|-------------|
-| json_programs | 1 row per member per program | The fact that a member is enrolled in a program. Contains their current point balance, lifetime totals (earned, redeemed, expired), termination status, and employer group. This is your starting point for member-level reporting. |
-| json_ag_incentives | 1 row per member | Simple flag indicating whether the member has incentives activated. Members with `incentives_activated = 'false'` will not earn points even if events fire. |
-
-### Tier 3: Transaction History
-
-These files record every point-changing event. Together they form a complete ledger.
-
-| File | Grain | What It Records |
-|------|-------|-----------------|
-| json_earned_history | 1 row per earning | Points awarded to a member for completing an activity. Contains the point amount, activity name, and timestamps. |
-| json_event_history | 1 row per raw event | Every qualifying event the system received — whether or not it resulted in points. Use this to diagnose "why didn't I earn?" questions. |
-| json_redemption_history | 1 row per redemption | Points spent by a member in the marketplace. Contains redemption date, amount, and transaction ID. |
-| json_expiration_history | 1 row per expiration | Points that expired due to time limits. Contains expiration date and amount. |
-| json_manual_adjustment_history | 1 row per adjustment | Administrative corrections — points added or removed manually with a reason/description. |
-
-**Key distinction:** `json_event_history` vs `json_earned_history`
-- An event is the raw trigger (e.g., "member completed a screening").
-- An earning is the result (e.g., "50 points awarded").
-- Events can fail to earn if: the member hit the cap, the group is locked, the event is a duplicate within the repeat window, or the program dates don't cover the event.
-- Compare them using `history_id` to find the gap.
-
-### Tier 4: Reward Details
-
-| File | Grain | Description |
-|------|-------|-------------|
-| json_reward_points | 1 row per reward instance | Detailed record of each reward earned. Includes points, currency label (Dollars/Points), dates, and which event triggered it. |
-| json_reward_alternative | 1 row per alternate reward | For programs that offer non-point rewards (specialist co-pay reductions, premium discounts). Contains both the primary and alternate reward names. |
-| json_redemption_history_product | 1 row per product per redemption | Marketplace line-item detail. Product name, SKU, quantity, reward type (eGift Card, Blue Rewards Card, etc.), and dollar total. |
+| # | File Name | What It Contains |
+|---|-----------|-----------------|
+| 11 | json_reward_points | Detail for each reward earned (points, dates, reason) |
+| 12 | json_reward_alternative | Non-point rewards like co-pay reductions |
+| 13 | json_redemption_history_product | What product/gift card was redeemed |
 
 ---
 
-## Join Keys
+## How the Files Connect
 
-| Key | What It Identifies | Where It Appears |
-|-----|-------------------|-----------------|
-| `program_id` | A specific incentive program | Every file |
-| `member_id` | A specific member (numeric) | All member-level files |
-| `member_program_id` | A member's enrollment in one program | json_programs, all history files, reward files |
-| `event_group_id` | A group of related activities | event_group_lu, events_lu |
-| `event_id` | One earnable activity | events_lu, reward_points, reward_alternative |
-| `history_id` | One transaction | All history files; links redemption_history to redemption_history_product |
-| `member_reward_id` | One reward instance | reward_points, reward_alternative (join these two together) |
-| `client_id` | The client/sponsor | json_programs, all history files |
-| `collection_id` | Program collection grouping | program_lu, json_programs |
-| `employer_id` | Employer/group within the client | json_programs |
+Think of it like a tree:
+
+1. **Start with a Program** (`json_incentives_program_lu`)
+2. Each program has **Activity Groups** (`json_incentives_program_event_group_lu`)
+3. Each group has **Individual Activities** (`json_incentives_program_events_lu`)
+4. **Members enroll** in programs (`json_programs`)
+5. Members **do things** and the system records it (the 5 history files)
+6. When they spend points, we know **what they bought** (`json_redemption_history_product`)
+
+The key that connects everything is **`program_id`**. Every file has it.
+
+To connect anything to a specific member, use **`member_id`**.
+
+To connect to a specific member's enrollment in a specific program, use **`member_id` + `member_program_id`**.
 
 ---
 
-## How to Join the Files
+## Connecting the Files (Join Examples)
 
-### Program Structure (Config → Groups → Events)
+### "I want to see what activities are in each program"
 
-**When to use:** Understanding what's available in a program, building a program catalog.
+Connect: Programs → Activity Groups → Activities
 
 ```sql
 SELECT
-    p.program_id, p.program_name, p.max_points,
-    eg.event_group_id, eg.event_group_name, eg.locks,
-    e.event_id, e.event_description, e.points
+    p.program_name,
+    eg.event_group_name   AS activity_group,
+    e.event_description   AS activity_name,
+    e.points              AS points_earned_for_this
 FROM json_incentives_program_lu p
 JOIN json_incentives_program_event_group_lu eg
     ON p.program_id = eg.program_id
 JOIN json_incentives_program_events_lu e
     ON eg.program_id = e.program_id
     AND eg.event_group_id = e.event_group_id
+ORDER BY p.program_name, eg.event_group_name, e.event_description
 ```
 
-### Member Enrollment + Program Details
+### "I want to see each member's balance and what program they're in"
 
-**When to use:** Reporting on who is enrolled, their balances, and program context.
+Connect: Member Enrollment → Program Name
 
 ```sql
 SELECT
-    m.member_id, m.point_balance,
-    m.program_points_earned, m.program_points_redeemed,
-    p.program_name, p.max_points
+    m.member_id,
+    p.program_name,
+    m.point_balance          AS current_balance,
+    m.program_points_earned  AS total_ever_earned,
+    m.program_points_redeemed AS total_ever_spent,
+    m.termination_date       AS terminated_on
 FROM json_programs m
 JOIN json_incentives_program_lu p
     ON m.program_id = p.program_id
+ORDER BY p.program_name, m.member_id
 ```
 
-### Earning Transactions + Activity Details
+### "I want to see what members earned and which activity triggered it"
 
-**When to use:** Understanding what members earned and which activity triggered it.
+Connect: Earning History → Program Name
 
 ```sql
 SELECT
-    eh.member_id, eh.event_timestamp,
-    eh.event_description, eh.reward AS points_earned,
-    e.event_type, eg.event_group_name
+    eh.member_id,
+    p.program_name,
+    eh.event_description  AS activity_completed,
+    eh.reward             AS points_earned,
+    eh.event_timestamp    AS when_they_did_it,
+    eh.incentives_timestamp AS when_points_were_awarded
 FROM json_earned_history eh
-JOIN json_incentives_program_events_lu e
-    ON eh.program_id = e.program_id
-    AND eh.event_identifier = e.event_secondary_identifier
-JOIN json_incentives_program_event_group_lu eg
-    ON e.program_id = eg.program_id
-    AND e.event_group_id = eg.event_group_id
+JOIN json_incentives_program_lu p
+    ON eh.program_id = p.program_id
+ORDER BY eh.member_id, eh.event_timestamp
 ```
 
-### Redemptions + Product Line Items
+### "I want to see what members redeemed for"
 
-**When to use:** Reporting on what members are redeeming for in the marketplace.
+Connect: Redemption History → Product Details
 
 ```sql
 SELECT
-    rh.member_id, rh.redemption_date, rh.points_redeemed,
-    rp.product_name, rp.quantity, rp.total, rp.reward_type
+    rh.member_id,
+    rh.redemption_date,
+    rh.points_redeemed,
+    rp.product_name,
+    rp.reward_type,
+    rp.total             AS dollar_value
 FROM json_redemption_history rh
 JOIN json_redemption_history_product rp
     ON rh.history_id = rp.history_id
     AND rh.program_id = rp.program_id
+ORDER BY rh.member_id, rh.redemption_date
 ```
 
-### Full Point Lifecycle (Audit Trail)
+### "I want a complete history of all point changes for a member"
 
-**When to use:** Reconciling a member's balance, auditing all point-changing events in order.
+Combine all 4 history files into one timeline:
 
 ```sql
-SELECT member_id, member_program_id, program_id,
-       incentives_timestamp, 'EARNED' AS transaction_type,
+SELECT member_id, incentives_timestamp,
+       'Earned' AS what_happened,
        CAST(reward AS INT) AS points_change,
-       event_description AS description
+       event_description AS details
 FROM json_earned_history
+
 UNION ALL
-SELECT member_id, member_program_id, program_id,
-       incentives_timestamp, 'REDEEMED',
-       -1 * points_redeemed, 'Marketplace Redemption'
+
+SELECT member_id, incentives_timestamp,
+       'Spent', -1 * points_redeemed, 'Marketplace Redemption'
 FROM json_redemption_history
+
 UNION ALL
-SELECT member_id, member_program_id, program_id,
-       incentives_timestamp, 'EXPIRED',
-       -1 * points_expired, 'Points Expired'
+
+SELECT member_id, incentives_timestamp,
+       'Expired', -1 * points_expired, 'Points Expired'
 FROM json_expiration_history
+
 UNION ALL
-SELECT member_id, member_program_id, program_id,
-       incentives_timestamp, 'ADJUSTMENT',
-       points_adjusted, description
+
+SELECT member_id, incentives_timestamp,
+       'Admin Adjustment', points_adjusted, description
 FROM json_manual_adjustment_history
-ORDER BY member_id, member_program_id, incentives_timestamp
+
+ORDER BY member_id, incentives_timestamp
 ```
 
-### Events That Did NOT Earn (Gap Analysis)
+---
 
-**When to use:** Troubleshooting why a member didn't receive points.
+## Common Reports
+
+### How many members are earning, and how much?
 
 ```sql
 SELECT
-    ev.member_id, ev.event_description,
-    ev.event_timestamp, ev.event_type
-FROM json_event_history ev
-LEFT JOIN json_earned_history eh
-    ON ev.history_id = eh.history_id
-    AND ev.program_id = eh.program_id
-WHERE eh.history_id IS NULL
+    p.program_name,
+    COUNT(DISTINCT eh.member_id)    AS members_who_earned,
+    SUM(CAST(eh.reward AS INT))     AS total_points_awarded,
+    COUNT(*)                        AS total_earning_events
+FROM json_earned_history eh
+JOIN json_incentives_program_lu p ON eh.program_id = p.program_id
+GROUP BY p.program_name
+ORDER BY total_points_awarded DESC
+```
+
+### Which activities are most popular?
+
+```sql
+SELECT
+    eh.event_description            AS activity,
+    COUNT(DISTINCT eh.member_id)    AS unique_members,
+    COUNT(*)                        AS times_completed,
+    SUM(CAST(eh.reward AS INT))     AS total_points
+FROM json_earned_history eh
+GROUP BY eh.event_description
+ORDER BY unique_members DESC
+```
+
+### Monthly trend — are members staying engaged?
+
+```sql
+SELECT
+    LEFT(eh.incentives_timestamp, 7) AS month,
+    COUNT(DISTINCT eh.member_id)     AS active_earners,
+    SUM(CAST(eh.reward AS INT))      AS total_points
+FROM json_earned_history eh
+GROUP BY LEFT(eh.incentives_timestamp, 7)
+ORDER BY month
+```
+
+### Earning rate by employer group
+
+```sql
+SELECT
+    m.employer_id,
+    COUNT(DISTINCT m.member_id) AS enrolled,
+    COUNT(DISTINCT CASE WHEN m.program_points_earned > 0 THEN m.member_id END) AS earned_at_least_once,
+    ROUND(
+        COUNT(DISTINCT CASE WHEN m.program_points_earned > 0 THEN m.member_id END) * 100.0
+        / NULLIF(COUNT(DISTINCT m.member_id), 0), 1
+    ) AS earning_rate_pct
+FROM json_programs m
+WHERE m.termination_date IS NULL
+GROUP BY m.employer_id
+ORDER BY enrolled DESC
+```
+
+### How many points are sitting unredeemed? (Liability)
+
+```sql
+SELECT
+    p.program_name,
+    COUNT(DISTINCT m.member_id)             AS members_with_balance,
+    SUM(m.point_balance)                    AS total_unredeemed_points,
+    SUM(m.point_balance) * p.point_monetary_value AS estimated_dollar_value
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+WHERE m.point_balance > 0
+  AND m.termination_date IS NULL
+GROUP BY p.program_name, p.point_monetary_value
+ORDER BY total_unredeemed_points DESC
+```
+
+### What are the most popular redemption products?
+
+```sql
+SELECT
+    rp.product_name,
+    rp.reward_type,
+    COUNT(DISTINCT rh.member_id)  AS unique_redeemers,
+    SUM(rh.points_redeemed)       AS total_points_spent,
+    SUM(rp.total)                 AS total_dollar_value
+FROM json_redemption_history rh
+JOIN json_redemption_history_product rp
+    ON rh.history_id = rp.history_id
+    AND rh.program_id = rp.program_id
+GROUP BY rp.product_name, rp.reward_type
+ORDER BY total_points_spent DESC
+```
+
+### Member segmentation (Power Users vs Inactive)
+
+```sql
+SELECT
+    CASE
+        WHEN m.program_points_earned = 0 THEN 'Inactive - Never Earned'
+        WHEN m.program_points_earned < p.max_points * 0.25 THEN 'Low Engagement'
+        WHEN m.program_points_earned < p.max_points * 0.75 THEN 'Moderate Engagement'
+        ELSE 'High Engagement'
+    END AS engagement_tier,
+    COUNT(*) AS member_count,
+    AVG(m.program_points_earned) AS avg_points_earned,
+    AVG(m.point_balance) AS avg_current_balance
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+WHERE m.termination_date IS NULL
+  AND p.max_points > 0
+GROUP BY
+    CASE
+        WHEN m.program_points_earned = 0 THEN 'Inactive - Never Earned'
+        WHEN m.program_points_earned < p.max_points * 0.25 THEN 'Low Engagement'
+        WHEN m.program_points_earned < p.max_points * 0.75 THEN 'Moderate Engagement'
+        ELSE 'High Engagement'
+    END
+ORDER BY avg_points_earned DESC
 ```
 
 ---
 
-## Key Concepts
+## Important Things to Know
 
-### Balance Reconciliation
+### Why didn't a member earn points?
 
-The `point_balance` in `json_programs` should equal:
+Use `json_event_history` to see what the system received, then compare to `json_earned_history`. If an event exists in event_history but NOT in earned_history (same `history_id`), the event was received but didn't qualify. Common reasons:
+
+- Member already hit the max for that activity
+- A prerequisite activity group hasn't been completed yet (see `locks` column)
+- Duplicate within the cooldown period
+- Activity happened outside the program date range
+- Member was terminated
+
+### What's the difference between incentives_timestamp and event_timestamp?
+
+- **event_timestamp** = When the member actually did the activity
+- **incentives_timestamp** = When our system processed it and awarded points
+
+They're usually close, but can differ by hours or days.
+
+### How does the balance add up?
 
 ```
-program_points_earned - program_points_redeemed - program_points_expired + net(manual_adjustments)
+current balance = total earned - total redeemed - total expired + manual adjustments
 ```
 
-If there's a discrepancy, check `json_manual_adjustment_history` for administrative corrections that explain the difference.
+If the numbers don't match, look at `json_manual_adjustment_history` for admin corrections.
 
-### Gating (Locks)
+### What are "Reward Alternatives"?
 
-Some event groups require a prerequisite. The `locks` column in `json_incentives_program_event_group_lu` contains the name of the event group that must be completed first. For example, if "Health Coaching" has `locks = 'Health Savings Account (HSA) Agreement'`, a member must complete the HSA agreement before coaching rewards unlock.
+Some programs award things other than points — like a $5 reduction on your specialist co-pay. These show up in `json_reward_alternative` with both the standard reward and the alternate reward name.
 
-### Timestamps: incentives_timestamp vs. event_timestamp
+### What does "locks" mean?
 
-- **incentives_timestamp** — When the system processed the transaction. Use this for "when was the reward given" reporting.
-- **event_timestamp** — When the qualifying activity actually occurred. Use this for "when did the member do the activity" reporting.
-
-These can differ by hours or days depending on processing lag.
-
-### Reward Alternatives
-
-Some programs offer non-monetary rewards alongside (or instead of) points — for example, specialist co-pay reductions or premium discounts. These appear in `json_reward_alternative` with both the primary and alternate reward identifiers. Join to `json_reward_points` on `member_reward_id` to see the full picture.
-
-### Data Types
-
-- **Dates** — Stored as varchar in `YYYY-MM-DD HH:MI:SS` format. Cast to DATE or TIMESTAMP for date math.
-- **IDs** — MongoDB hex strings (varchar). Always join on exact string match.
-- **member_id** — Numeric string representing the Sharecare member identifier.
-- **reward** (in earned_history) — Varchar containing the point amount. Cast to INT for arithmetic.
+In the event group file, the `locks` column means "this group is locked until another group is completed." For example, the Health Coaching group might be locked until the member completes their HSA Agreement.
 
 ---
 
-## Appendix: Column Definitions
+## Date and ID Format Notes
+
+- **Dates** are text in `YYYY-MM-DD HH:MI:SS` format. To do date math, cast them: `CAST(column AS DATE)`
+- **IDs** (program_id, history_id, etc.) are text strings like `5c6da3e075e97168ade8e7c2`. Match them exactly.
+- **member_id** is a number stored as text (like `1000352`).
+- **reward** in earned_history is text. Cast it to a number for sums: `CAST(reward AS INT)`
+
+---
+
+## Full Column Reference
+
+The tables below list every column in every file. Use this as a lookup when building queries.
 
 ### json_incentives_program_lu
 
-| Column | Type | Description |
-|--------|------|-------------|
-| program_id | varchar(100) | Unique program identifier (PK) |
-| collection_id | varchar(200) | Program collection grouping |
-| point_monetary_value | numeric | Dollar value per point (1 = $1/point, 0 = marketplace model) |
-| currency | varchar(100) | Currency code (USD) |
-| has_marketplace | varchar(5) | Whether program has a redemption marketplace (true/false) |
-| rewards_provider | varchar(100) | ADR (third-party marketplace) or SHARECARE (internal fulfillment) |
-| reminder_period | varchar(100) | Reminder cadence setting |
-| start_date | varchar(121) | Program start date |
-| end_date | varchar(121) | Program end date |
-| blackout_date | varchar(121) | Date when earning is temporarily suspended |
-| program_rules_id | varchar(100) | Internal reference to rules configuration |
-| content | varchar(1000) | Program description text |
-| expire_days_after_earned | int | Days after earning before points expire |
-| expire_days_after_program_end | int | Days after program end before points expire |
-| show_reward | varchar(5) | Whether the reward is visible to the member |
-| max_points | int | Maximum total points earnable in the program |
-| expire_days_after_term | int | Days after member termination before points expire |
-| autoredeem | varchar(5) | Whether unredeemed points auto-redeem (true/false) |
-| autoredeem_days_after_term | int | Days after termination to trigger auto-redemption |
-| autoredeem_min_points | int | Minimum balance required for auto-redemption |
-| program_name | varchar(100) | Display name shown to members |
-| internal_name | varchar(100) | Internal name used for program identification |
-| last_updated_date | varchar(121) | Last modification timestamp |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| program_id | varchar | Unique ID for this program |
+| collection_id | varchar | Collection this program belongs to |
+| point_monetary_value | numeric | How much each point is worth in dollars (0 = marketplace) |
+| currency | varchar | Currency (USD) |
+| has_marketplace | varchar | Does this program have a shopping marketplace? (true/false) |
+| rewards_provider | varchar | Who fulfills rewards — ADR (marketplace) or SHARECARE |
+| reminder_period | varchar | How often members get reminders |
+| start_date | varchar | When the program starts |
+| end_date | varchar | When the program ends |
+| blackout_date | varchar | Date earning is temporarily paused |
+| program_rules_id | varchar | Internal rules reference |
+| content | varchar | Program description text |
+| expire_days_after_earned | int | Days before earned points expire |
+| expire_days_after_program_end | int | Days after program ends before points expire |
+| show_reward | varchar | Is the reward shown to members? (true/false) |
+| max_points | int | Maximum points a member can earn total |
+| expire_days_after_term | int | Days after termination before points expire |
+| autoredeem | varchar | Do points auto-redeem? (true/false) |
+| autoredeem_days_after_term | int | Days after termination to auto-redeem |
+| autoredeem_min_points | int | Minimum balance needed for auto-redeem |
+| program_name | varchar | Name members see |
+| internal_name | varchar | Internal name for reference |
+| last_updated_date | varchar | When this record was last changed |
 
 ### json_incentives_program_event_group_lu
 
-| Column | Type | Description |
-|--------|------|-------------|
-| program_id | varchar(100) | Parent program (FK) |
-| event_group_id | varchar(100) | Unique group identifier (PK with program_id) |
-| event_group_name | varchar(1000) | Display name of the event group |
-| locks | varchar(100) | Name of prerequisite group (must complete first) |
-| repeatable | varchar(5) | Whether this group's events can be earned multiple times |
-| points | int | Group-level point award (used when group_level_reward = true) |
-| group_level_reward | varchar(5) | Award points at the group level rather than per-event |
-| repeat_period | varchar(100) | Time window for repeat earning (e.g., yearly, monthly) |
-| time_between_periods | varchar(100) | Required gap between earning periods |
-| rewards_per_period | int | Maximum number of rewards allowed per period |
-| reward_earned_after | int | Number of qualifying events required before reward fires |
-| dynamic_start | varchar(1) | Whether the repeat period starts from the first qualifying event |
-| max_repeats_per_day | int | Maximum earning occurrences in one day |
-| last_updated_date | varchar(121) | Last modification timestamp |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| program_id | varchar | Which program this group belongs to |
+| event_group_id | varchar | Unique ID for this group |
+| event_group_name | varchar | Name of the activity group |
+| locks | varchar | Which other group must be completed first (blank = no prerequisite) |
+| repeatable | varchar | Can members earn from this group more than once? (true/false) |
+| points | int | Points awarded at the group level (if applicable) |
+| group_level_reward | varchar | Is the reward for completing the whole group? (true/false) |
+| repeat_period | varchar | How often the group can be repeated |
+| time_between_periods | varchar | Required gap between repeats |
+| rewards_per_period | int | Max rewards per repeat window |
+| reward_earned_after | int | How many activities must be done before reward fires |
+| dynamic_start | varchar | Does the repeat window start from first activity? |
+| max_repeats_per_day | int | Max earnings per day |
+| last_updated_date | varchar | When this record was last changed |
 
 ### json_incentives_program_events_lu
 
-| Column | Type | Description |
-|--------|------|-------------|
-| program_id | varchar(100) | Parent program (FK) |
-| event_group_id | varchar(100) | Parent event group (FK) |
-| event_id | varchar(100) | Unique event identifier |
-| event_type | varchar(100) | Trigger type (e.g., /assessments/completed, /member-tags/changed) |
-| event_secondary_identifier | varchar(2000) | Secondary matching key — used to link incoming events to this config |
-| event_description | varchar(1000) | Activity name displayed to the member |
-| start_date | varchar(121) | Earning window start |
-| end_date | varchar(121) | Earning window end |
-| blackout_date | varchar(121) | Temporary earning suspension date |
-| look_back_period | timestamp | How far back to search for qualifying events |
-| min_age | varchar(1) | Age minimum filter |
-| max_age | varchar(1) | Age maximum filter |
-| gender | varchar(1) | Gender filter |
-| conditions | varchar(1) | Health condition filter |
-| events_eligible | varchar(1) | Events eligibility filter |
-| repeat_period | varchar(100) | Repeat earning window |
-| time_between_periods | varchar(100) | Required gap between repeat windows |
-| rewards_per_period | int | Max rewards per period |
-| reward_earned_after | int | Qualifying events required before earning |
-| dynamic_start | varchar(1) | Period starts from first qualifying event |
-| max_repeats_per_day | int | Maximum per day |
-| points | int | Points awarded for completing this event |
-| max_points | int | Maximum points earnable from this event |
-| group_level_reward | varchar(5) | Whether this event contributes to group-level reward |
-| reward_identifier | varchar(200) | Reward type code |
-| reward_name | varchar(200) | Reward type display name |
-| tiered_reward_points | varchar(200) | Tiered point structure (if applicable) |
-| last_updated_date | varchar(121) | Last modification timestamp |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| program_id | varchar | Which program |
+| event_group_id | varchar | Which activity group this belongs to |
+| event_id | varchar | Unique ID for this activity |
+| event_type | varchar | What kind of trigger (assessment, tag change, etc.) |
+| event_secondary_identifier | varchar | Matching key for incoming events |
+| event_description | varchar | Activity name members see |
+| start_date | varchar | When this activity starts being earnable |
+| end_date | varchar | When this activity stops being earnable |
+| blackout_date | varchar | Temporary pause date |
+| look_back_period | timestamp | How far back to look for qualifying events |
+| min_age | varchar | Minimum age to qualify |
+| max_age | varchar | Maximum age to qualify |
+| gender | varchar | Gender filter |
+| conditions | varchar | Health condition filter |
+| events_eligible | varchar | Eligibility filter |
+| repeat_period | varchar | How often this can be re-earned |
+| time_between_periods | varchar | Gap between re-earns |
+| rewards_per_period | int | Max rewards per window |
+| reward_earned_after | int | Activities needed before earning |
+| dynamic_start | varchar | Window starts from first activity? |
+| max_repeats_per_day | int | Max per day |
+| points | int | Points this activity is worth |
+| max_points | int | Max points earnable from this activity |
+| group_level_reward | varchar | Part of a group reward? |
+| reward_identifier | varchar | Reward type code |
+| reward_name | varchar | Reward type name |
+| tiered_reward_points | varchar | Tiered values (if applicable) |
+| last_updated_date | varchar | When this record was last changed |
 
 ### json_programs
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member identifier |
-| member_program_id | varchar(100) | Unique enrollment record |
-| program_id | varchar(100) | Program enrolled in (FK to program_lu) |
-| client_id | varchar(100) | Client/sponsor (e.g., HP_SCCAREFIRST) |
-| point_balance | int | Current unredeemed balance |
-| program_points_earned | int | Lifetime total points earned |
-| program_points_redeemed | int | Lifetime total points redeemed |
-| program_points_expired | int | Lifetime total points expired |
-| termination_aggressive | varchar(5) | Whether aggressive termination applies |
-| termination_date | varchar(121) | Date the member was terminated from the program (NULL = active) |
-| collection_id | varchar(1000) | Program collection assignment |
-| employer_id | varchar(200) | Employer/group identifier within the client |
-| last_updated_date | varchar(121) | Last modification timestamp |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | The member |
+| member_program_id | varchar | This specific enrollment |
+| program_id | varchar | Which program they're in |
+| client_id | varchar | Client/sponsor ID |
+| point_balance | int | Points they have right now |
+| program_points_earned | int | All-time points earned |
+| program_points_redeemed | int | All-time points spent |
+| program_points_expired | int | All-time points expired |
+| termination_aggressive | varchar | Aggressive termination applied? |
+| termination_date | varchar | When they were removed (blank = still active) |
+| collection_id | varchar | Program collection |
+| employer_id | varchar | Their employer group |
+| last_updated_date | varchar | When this record was last changed |
 
 ### json_ag_incentives
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member identifier |
-| incentives_activated | varchar(4) | Whether incentives are turned on for this member (true/false) |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | The member |
+| incentives_activated | varchar | Are incentives turned on? (true/false) |
 
 ### json_earned_history
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member who earned |
-| history_id | varchar(100) | Unique transaction ID |
-| program_id | varchar(100) | Program (FK) |
-| member_program_id | varchar(100) | Enrollment record (FK) |
-| client_id | varchar(100) | Client identifier |
-| incentives_timestamp | varchar(121) | When the system processed the earning |
-| event_timestamp | varchar(121) | When the qualifying activity actually occurred |
-| event_type | varchar(100) | Trigger type |
-| event_identifier | varchar(2000) | Links to event_secondary_identifier in events_lu |
-| event_description | varchar(1000) | Activity name displayed to the member |
-| reward | varchar(100) | Points/dollars awarded — cast to INT for arithmetic |
-| point_balance | int | Member's balance immediately after this transaction |
-| manually_fired | varchar(5) | Whether this earning was manually triggered by an administrator |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Who earned |
+| history_id | varchar | Unique ID for this transaction |
+| program_id | varchar | Which program |
+| member_program_id | varchar | Which enrollment |
+| client_id | varchar | Client ID |
+| incentives_timestamp | varchar | When the system awarded it |
+| event_timestamp | varchar | When the member actually did it |
+| event_type | varchar | What kind of trigger |
+| event_identifier | varchar | Matches to the activity config |
+| event_description | varchar | Activity name |
+| reward | varchar | Points awarded (cast to number for math) |
+| point_balance | int | Balance after this transaction |
+| manually_fired | varchar | Was this manually triggered? (true/false) |
 
 ### json_event_history
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member the event belongs to |
-| history_id | varchar(100) | Unique transaction ID |
-| program_id | varchar(100) | Program (FK) |
-| member_program_id | varchar(100) | Enrollment record (FK) |
-| client_id | varchar(100) | Client identifier |
-| incentives_timestamp | varchar(121) | When the system processed the event |
-| event_timestamp | varchar(121) | When the event actually occurred |
-| event_type | varchar(100) | Trigger type |
-| event_identifier | varchar(2000) | Event matching key |
-| event_description | varchar(1000) | Activity name |
-| manually_fired | varchar(5) | Whether manually triggered |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Who the event belongs to |
+| history_id | varchar | Unique ID for this event |
+| program_id | varchar | Which program |
+| member_program_id | varchar | Which enrollment |
+| client_id | varchar | Client ID |
+| incentives_timestamp | varchar | When the system received it |
+| event_timestamp | varchar | When it actually happened |
+| event_type | varchar | What kind of trigger |
+| event_identifier | varchar | Event matching key |
+| event_description | varchar | Activity name |
+| manually_fired | varchar | Manually triggered? (true/false) |
 
 ### json_redemption_history
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member who redeemed |
-| history_id | varchar(100) | Unique transaction ID |
-| program_id | varchar(100) | Program (FK) |
-| member_program_id | varchar(100) | Enrollment record (FK) |
-| client_id | varchar(100) | Client identifier |
-| incentives_timestamp | varchar(121) | When the system processed the redemption |
-| event_timestamp | varchar(121) | Event timestamp |
-| redemption_date | varchar(121) | Date the redemption was executed |
-| points_redeemed | int | Points spent |
-| points_word | varchar(100) | Currency label (Dollars, Points, etc.) |
-| point_balance | int | Balance after redemption |
-| transaction_id | varchar(100) | External transaction reference for reconciliation |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Who redeemed |
+| history_id | varchar | Unique ID for this redemption |
+| program_id | varchar | Which program |
+| member_program_id | varchar | Which enrollment |
+| client_id | varchar | Client ID |
+| incentives_timestamp | varchar | When the system processed it |
+| event_timestamp | varchar | Event timestamp |
+| redemption_date | varchar | When the redemption happened |
+| points_redeemed | int | How many points were spent |
+| points_word | varchar | Currency label (Dollars, Points) |
+| point_balance | int | Balance after spending |
+| transaction_id | varchar | External transaction reference |
 
 ### json_expiration_history
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member whose points expired |
-| history_id | varchar(100) | Unique transaction ID |
-| program_id | varchar(100) | Program (FK) |
-| member_program_id | varchar(100) | Enrollment record (FK) |
-| client_id | varchar(100) | Client identifier |
-| incentives_timestamp | varchar(121) | When the system processed the expiration |
-| event_timestamp | varchar(121) | Event timestamp |
-| expiration_date | varchar(121) | Date the points expired |
-| points_expired | int | Number of points that expired |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Whose points expired |
+| history_id | varchar | Unique ID |
+| program_id | varchar | Which program |
+| member_program_id | varchar | Which enrollment |
+| client_id | varchar | Client ID |
+| incentives_timestamp | varchar | When the system processed it |
+| event_timestamp | varchar | Event timestamp |
+| expiration_date | varchar | When the points expired |
+| points_expired | int | How many points expired |
 | point_balance | int | Balance after expiration |
 
 ### json_manual_adjustment_history
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member affected |
-| history_id | varchar(100) | Unique transaction ID |
-| program_id | varchar(100) | Program (FK) |
-| member_program_id | varchar(100) | Enrollment record (FK) |
-| client_id | varchar(100) | Client identifier |
-| incentives_timestamp | varchar(121) | When the adjustment was processed |
-| event_timestamp | varchar(121) | Event timestamp |
-| points_adjusted | int | Points added (positive) or removed (negative) |
-| description | varchar(1000) | Reason for the adjustment |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Who was adjusted |
+| history_id | varchar | Unique ID |
+| program_id | varchar | Which program |
+| member_program_id | varchar | Which enrollment |
+| client_id | varchar | Client ID |
+| incentives_timestamp | varchar | When the adjustment was made |
+| event_timestamp | varchar | Event timestamp |
+| points_adjusted | int | Points added (+) or removed (-) |
+| description | varchar | Why the adjustment was made |
 | point_balance | int | Balance after adjustment |
 
 ### json_reward_points
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member who earned the reward |
-| member_program_id | varchar(100) | Enrollment record (FK) |
-| member_reward_id | varchar(100) | Unique reward instance — join to reward_alternative on this |
-| program_id | varchar(100) | Program (FK) |
-| points | int | Points awarded |
-| points_word | varchar(100) | Currency label (Dollars, Points) |
-| earned_date | varchar(121) | When the reward was earned |
-| activity_date | varchar(121) | When the qualifying activity occurred |
-| reward_reason | varchar(1000) | Why the reward was given |
-| event_id | varchar(100) | Which event triggered this reward (FK to events_lu.event_id) |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Who earned the reward |
+| member_program_id | varchar | Which enrollment |
+| member_reward_id | varchar | Unique reward instance (use to join to reward_alternative) |
+| program_id | varchar | Which program |
+| points | int | Points for this reward |
+| points_word | varchar | Currency label (Dollars, Points) |
+| earned_date | varchar | When it was earned |
+| activity_date | varchar | When the activity happened |
+| reward_reason | varchar | Why it was earned |
+| event_id | varchar | Which activity triggered it |
 
 ### json_reward_alternative
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member who earned |
-| member_program_id | varchar(100) | Enrollment record (FK) |
-| member_reward_id | varchar(100) | Reward instance — join to reward_points on this |
-| program_id | varchar(100) | Program (FK) |
-| reward_name | varchar(1000) | Primary reward name |
-| reward_identifier | varchar(100) | Primary reward code |
-| reward_alternate_name | varchar(1000) | Alternate reward name (e.g., Specialist Copay $5 Reduction) |
-| reward_alternate_identifier | varchar(100) | Alternate reward code |
-| earned_date | varchar(121) | When the reward was earned |
-| activity_date | varchar(121) | When the qualifying activity occurred |
-| reward_reason | varchar(1000) | Why the reward was given |
-| event_id | varchar(100) | Which event triggered this reward (FK to events_lu) |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Who earned |
+| member_program_id | varchar | Which enrollment |
+| member_reward_id | varchar | Reward instance (use to join to reward_points) |
+| program_id | varchar | Which program |
+| reward_name | varchar | Standard reward name |
+| reward_identifier | varchar | Standard reward code |
+| reward_alternate_name | varchar | Alternate reward (e.g., Specialist Copay $5 Reduction) |
+| reward_alternate_identifier | varchar | Alternate reward code |
+| earned_date | varchar | When earned |
+| activity_date | varchar | When the activity happened |
+| reward_reason | varchar | Why it was earned |
+| event_id | varchar | Which activity triggered it |
 
 ### json_redemption_history_product
 
-| Column | Type | Description |
-|--------|------|-------------|
-| member_id | varchar(100) | Member who redeemed |
-| history_id | varchar(100) | Redemption transaction (FK to redemption_history) |
-| program_id | varchar(100) | Program (FK) |
-| product_name | varchar(1000) | Product redeemed |
-| points | varchar(100) | Points spent on this item |
-| total | numeric | Dollar value of this line item |
-| quantity | varchar(100) | Quantity |
-| sku | varchar(100) | Product SKU |
-| reward_type | varchar(100) | Reward category (eGift Card, Blue Rewards Card, etc.) |
-| product_id | varchar(100) | Product catalog identifier |
+| Column | Type | What It Is |
+|--------|------|-----------|
+| member_id | varchar | Who redeemed |
+| history_id | varchar | Which redemption this belongs to (join to redemption_history) |
+| program_id | varchar | Which program |
+| product_name | varchar | What they got |
+| points | varchar | Points spent on this item |
+| total | numeric | Dollar value |
+| quantity | varchar | How many |
+| sku | varchar | Product SKU |
+| reward_type | varchar | Category (eGift Card, Blue Rewards Card, etc.) |
+| product_id | varchar | Product catalog ID |
