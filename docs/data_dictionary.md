@@ -70,20 +70,12 @@ When a member "orders" (completes an activity), it creates an **Earning**. They 
 
 ### How to Connect Any Two Files
 
-Every file has a column called `program_id`. That's the key that links them all together.
+Every file has a column called `program_id`. That's the universal key that links them all.
 
-Here's a simple example of how you'd connect the most common files:
+- To narrow to **one member**, filter on `member_id`
+- To narrow to **one member in one specific program**, use `member_id` + `member_program_id`
 
-```
-Members  ──── program_id ────→  Programs         (to get the program name)
-Earnings ──── program_id ────→  Programs         (to get the program name)
-Redemptions ─ history_id ───→  Products          (to see what they bought)
-Events ────── history_id ───→  Earnings          (to check if it earned)
-```
-
-When you want to narrow down to **one member**, filter or join on `member_id`.
-
-When you want to narrow to **one member in one specific program**, use both `member_id` and `member_program_id`.
+See the [Connecting Files: Quick Reference](#connecting-files-quick-reference) table below for specific join paths.
 
 ---
 
@@ -91,26 +83,28 @@ When you want to narrow to **one member in one specific program**, use both `mem
 
 ### How the Point Balance Works
 
-The `point_balance` field in the Members file equals:
+**A member's current balance is simply: what they earned, minus what they spent, minus what expired, plus any admin adjustments.**
 
-> **Earned − Redeemed − Expired + Adjustments = Current Balance**
+The formula using column names from the Members file:
 
-If the math doesn't add up, look at the Adjustments file for manual corrections.
+> `point_balance` = `program_points_earned` − `program_points_redeemed` − `program_points_expired` + manual adjustments
+
+If the math doesn't add up, look at the Adjustments file — it contains admin corrections not reflected in the other three totals.
 
 ### Two Types of Timestamps
 
-Every transaction has two dates:
+**Every transaction has two dates — when the member did it, and when the system processed it.**
 
 | Column | What It Means | Use It When... |
 |--------|--------------|----------------|
 | event_timestamp | When the member actually did the activity | You want "when did members do this?" |
 | incentives_timestamp | When the system processed it and awarded points | You want "when were points given?" |
 
-They're usually close (same day), but can differ by hours or days.
+They're usually the same day, but can differ by hours or days due to processing lag.
 
 ### Why Would an Activity Not Earn Points?
 
-Not every activity results in points. The **Events** file shows everything the system received. The **Earnings** file shows only what actually earned. Common reasons for no earning:
+**Not every activity results in points.** The Events file logs everything the system received. The Earnings file logs only what actually earned. If something is in Events but not in Earnings, one of these happened:
 
 - Member already hit the maximum for that activity
 - A prerequisite group wasn't completed yet (see below)
@@ -120,11 +114,11 @@ Not every activity results in points. The **Events** file shows everything the s
 
 ### Prerequisites ("Locks")
 
-Some activity groups require another group to be completed first. In the Activity Groups file, the `locks` column shows the prerequisite. For example, "Health Coaching" might require "HSA Agreement" to be completed first. If `locks` is blank, there's no prerequisite.
+**Some activity groups are locked until a prerequisite is completed.** In the Activity Groups file, the `locks` column names the prerequisite group. For example, "Health Coaching" might require "HSA Agreement" first. If `locks` is blank, there's no prerequisite — the member can earn immediately.
 
 ### Reward Alternatives
 
-Most members earn points. But some programs also offer non-point rewards — for example, a $5 reduction on specialist co-pays. These appear in the **Reward Alternatives** file alongside the standard reward in the **Rewards** file. Connect them using `member_reward_id`.
+**Some programs offer non-point rewards in addition to (or instead of) points.** For example, a $5 reduction on specialist co-pays. These appear in the Reward Alternatives file. Connect them to the Rewards file using `member_reward_id` to see both the standard and alternate reward on one row.
 
 ### Filtering by Date
 
@@ -170,7 +164,7 @@ WHERE eh.incentives_timestamp >= '2026-01-01'
 
 ## Report Queries
 
-Copy these directly into your SQL tool. Each answers a common business question.
+These SQL queries are ready to copy into your database tool. Modify the date filters, column lists, or groupings to fit your needs. For 20 additional queries with detailed explanations, see [example_queries.sql](../sql/example_queries.sql).
 
 ### What activities are available and how many points are they worth?
 
