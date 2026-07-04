@@ -1,157 +1,139 @@
 # Blue Rewards Incentive Data Guide
 
-> **Start here.** This document explains the 13 JSON data files you receive, how they fit together, and how to use them for reporting.
->
-> **Additional resources:**
-> - [Column Reference](column_reference.md) — Every column in every file, with descriptions
-> - [Example Queries (SQL)](../sql/example_queries.sql) — 20 ready-to-run queries with detailed comments
+This guide explains the 13 data files you receive for Blue Rewards incentive reporting. It's written so you can understand the data without needing to read SQL first.
+
+For SQL examples, skip to [Report Queries](#report-queries) at the bottom, or open the dedicated **[example_queries.sql](../sql/example_queries.sql)** file (20 queries with full comments).
+
+For a column-by-column reference, see **[column_reference.md](column_reference.md)**.
 
 ---
 
-## Table of Contents
+## What You're Getting
 
-1. [Your 13 Files](#your-13-files)
-2. [How They Fit Together](#how-they-fit-together)
-3. [Important Concepts](#important-concepts)
-4. [How to Connect the Files](#how-to-connect-the-files)
-5. [Report Examples](#report-examples)
+You receive 13 files. Each file is a table of data. Together, they tell you everything about your incentive program: what's configured, who's enrolled, what members earned, what they spent, and what expired.
 
----
+We'll refer to them by short names throughout this guide:
 
-## Your 13 Files
-
-You receive four categories of data:
-
-### Program Setup (3 files)
-
-These define your program — what activities exist and how many points each is worth. They don't contain any member-level data.
-
-| File | One Row = | Purpose |
-|------|-----------|---------|
-| **json_incentives_program_lu** | One incentive program | The master list of your programs with names, dates, and max points |
-| **json_incentives_program_event_group_lu** | One group of activities | Groups related activities together (e.g., "Health Screening", "Coaching") |
-| **json_incentives_program_events_lu** | One earnable activity | The specific things members can do to earn (e.g., "Complete RealAge Test") |
-
-### Member Enrollment (2 files)
-
-| File | One Row = | Purpose |
-|------|-----------|---------|
-| **json_programs** | One member in one program | Shows who is enrolled, their current balance, and lifetime totals |
-| **json_ag_incentives** | One member | Simple yes/no: are incentives turned on for this person? |
-
-### Transaction History (5 files)
-
-These are the activity logs — one row every time something happens to a member's points.
-
-| File | One Row = | Purpose |
-|------|-----------|---------|
-| **json_earned_history** | One earning event | Member completed an activity and received points |
-| **json_event_history** | One raw event | System received an activity signal (may or may not have earned) |
-| **json_redemption_history** | One redemption | Member spent their points |
-| **json_expiration_history** | One expiration | Points expired due to time limits |
-| **json_manual_adjustment_history** | One admin correction | Points manually added or removed with a reason |
-
-### Reward Details (3 files)
-
-| File | One Row = | Purpose |
-|------|-----------|---------|
-| **json_reward_points** | One reward earned | Detailed reward record with dates and the triggering activity |
-| **json_reward_alternative** | One alternate reward | Non-point rewards (e.g., co-pay reductions, premium discounts) |
-| **json_redemption_history_product** | One product in a redemption | What the member actually bought (product name, gift card type, dollar amount) |
+| Short Name | Full File Name | What It Is |
+|-----------|---------------|-----------|
+| **Programs** | json_incentives_program_lu | Your incentive programs — names, dates, point limits |
+| **Activity Groups** | json_incentives_program_event_group_lu | Groupings of related activities (e.g., "Preventive Screening", "Coaching") |
+| **Activities** | json_incentives_program_events_lu | Each specific activity a member can do to earn points |
+| **Members** | json_programs | Who is enrolled, their balance, and lifetime totals |
+| **Activation Flag** | json_ag_incentives | Simple yes/no: are incentives turned on for this member? |
+| **Earnings** | json_earned_history | Every time points were awarded to a member |
+| **Events** | json_event_history | Every activity signal received (even if it didn't result in points) |
+| **Redemptions** | json_redemption_history | Every time a member spent points |
+| **Products** | json_redemption_history_product | What they bought when they redeemed (gift cards, etc.) |
+| **Expirations** | json_expiration_history | Points that expired |
+| **Adjustments** | json_manual_adjustment_history | Manual corrections made by an administrator |
+| **Rewards** | json_reward_points | Detailed reward records with dates and triggering activity |
+| **Reward Alternatives** | json_reward_alternative | Non-point rewards (co-pay reductions, premium discounts) |
 
 ---
 
 ## How They Fit Together
 
-### The Big Picture
+The files form a simple hierarchy:
 
-```
-Programs contain → Activity Groups contain → Activities
+**A Program contains Activity Groups, which contain Activities.**
 
-Members enroll in → Programs
+Think of your Blue Rewards program like a menu. The menu (Programs) has sections (Activity Groups) like "Preventive Care" or "Wellness." Each section has items (Activities) like "Complete a Health Screening" worth 500 points.
 
-Members complete → Activities → which creates → Earning History
+**Members enroll in a Program.** Once enrolled, they complete Activities, which creates Earnings. They can then spend those points (Redemptions) on gift cards or other products (Products). Points they don't spend may eventually Expire.
 
-Members spend points → which creates → Redemption History → with → Product Details
+**The one field that connects everything is `program_id`.** Every file has it. That's how you join any two files together.
 
-Points can also → Expire or be Manually Adjusted
-```
-
-### The Three Keys You Need
-
-| When you want to... | Connect files using... |
-|---------------------|----------------------|
-| Link anything to a specific **program** | `program_id` (every file has this) |
-| Link anything to a specific **member** | `member_id` |
-| Link to a member's **enrollment in one program** | `member_id` + `member_program_id` |
-
-### Quick Join Reference
-
-| I have this file... | I want to add... | Join to... | Using... |
-|--------------------|-----------------|-----------|---------|
-| json_programs | Program name and details | json_incentives_program_lu | `program_id` |
-| json_earned_history | Program name | json_incentives_program_lu | `program_id` |
-| json_earned_history | Activity config details | json_incentives_program_events_lu | `program_id` + `event_identifier = event_secondary_identifier` |
-| json_redemption_history | What they bought | json_redemption_history_product | `history_id` + `program_id` |
-| json_reward_points | Alternate reward info | json_reward_alternative | `member_reward_id` |
-| json_event_history | Did it earn? | json_earned_history | `history_id` + `program_id` |
-| Any history file | Member's current balance | json_programs | `member_id` + `member_program_id` |
+To narrow down to one person, add `member_id`. To narrow to one person in one specific program, use both `member_id` and `member_program_id`.
 
 ---
 
-## Important Concepts
+## Understanding the Key Files
 
-### How the Balance Works
+### Members (json_programs) — Your Starting Point
 
-A member's `point_balance` in json_programs should equal:
+This is usually where you'll start. Each row is one member enrolled in one program. Key columns:
 
+- **point_balance** — What they have right now
+- **program_points_earned** — Everything they've ever earned
+- **program_points_redeemed** — Everything they've ever spent
+- **program_points_expired** — Everything that expired
+- **termination_date** — If blank, they're still active. If filled, they've been removed.
+- **employer_id** — Their employer group (useful for breaking out reports)
+
+**How the balance works:**
 ```
-Points Earned − Points Redeemed − Points Expired + Manual Adjustments = Current Balance
+Current Balance = Earned − Redeemed − Expired + Adjustments
 ```
 
-If numbers don't match, check `json_manual_adjustment_history` for admin corrections.
+### Earnings (json_earned_history) — What Members Did
 
-### Events vs. Earnings: What's the Difference?
+Each row is one time a member earned points. Key columns:
 
-- **json_event_history** = "The system received a signal that a member did something"
-- **json_earned_history** = "Points were actually awarded"
+- **event_description** — The activity name (e.g., "Complete a Preventive Screening")
+- **reward** — How many points they got (note: stored as text, cast to number for math)
+- **event_timestamp** — When the member did the activity
+- **incentives_timestamp** — When the system awarded the points (may be slightly later)
 
-Not every event results in an earning. An event can fail to earn if:
-- The member already hit the maximum for that activity
-- A prerequisite group hasn't been completed yet (gating)
-- It's a duplicate within the cooldown period
+### Events (json_event_history) — Including Things That Didn't Earn
+
+Similar to Earnings, but includes activities that were received by the system but **did not** result in points. Why would something not earn?
+
+- Member already maxed out that activity
+- A prerequisite wasn't completed yet (see "Gating" below)
+- It was a duplicate within the cooldown window
 - The activity happened outside the program's date range
 - The member was terminated
 
-**To find events that didn't earn:** Look for `history_id` values in event_history that have no match in earned_history.
+**How to find what didn't earn:** Compare Events to Earnings using `history_id`. If an event's `history_id` has no match in Earnings, it didn't result in points.
 
-### Gating (Locks)
+### Redemptions + Products — What They Spent On
 
-Some activity groups require a prerequisite. The `locks` column in the event group file tells you which group must be completed first. Example: "Health Coaching" might be locked until "HSA Agreement" is completed.
+**Redemptions** shows each time a member spent points. **Products** shows what they actually got (e.g., a $25 Amazon gift card). Connect them using `history_id` + `program_id`. One redemption can have multiple products.
 
-### Two Timestamps
+### Expirations — Points Lost to Time
 
-- **event_timestamp** = When the member did the activity
-- **incentives_timestamp** = When the system processed it and awarded points
+Each row is points that expired because the member didn't use them within the allowed window. The `expiration_date` tells you when, and `points_expired` tells you how many.
 
-Use event_timestamp for "when did activity happen" reports. Use incentives_timestamp for "when were points given" reports.
+### Adjustments — Manual Corrections
 
-### Reward Alternatives
-
-Some programs offer non-point rewards (like a $5 specialist co-pay reduction). These appear in `json_reward_alternative`. Join it to `json_reward_points` using `member_reward_id`.
-
-### Data Format Notes
-
-- **Dates** are text formatted as `2026-03-15 14:30:00`. Cast to DATE for math: `CAST(column AS DATE)`
-- **IDs** are text strings like `5c6da3e075e97168ade8e7c2`. Always match exactly.
-- **member_id** is a number stored as text (e.g., `1000352`).
-- **reward** in earned_history is text. Cast to number for sums: `CAST(reward AS INT)`
+Admin corrections — points added or removed manually. The `description` column explains why (e.g., "Refund - IRS3227" or "Manual points for RealAge re-take activity"). Use this to reconcile balances that don't add up from Earnings/Redemptions/Expirations alone.
 
 ---
 
-## How to Connect the Files
+## Gating (Prerequisites)
 
-### See all activities available in a program
+Some activity groups are locked until a member completes a different group first. For example:
+
+> "Health Coaching" rewards are **locked** until the member completes "HSA Agreement"
+
+You'll see this in the Activity Groups file — the `locks` column names the prerequisite group. If it's blank, there's no prerequisite.
+
+---
+
+## Connecting Files Together
+
+Here's a plain-English guide to which files you join and what field you use:
+
+| I'm looking at... | I want to add... | Join to... | Match on... |
+|-------------------|-----------------|-----------|-------------|
+| Members | The program name | Programs | `program_id` |
+| Earnings | The program name | Programs | `program_id` |
+| Earnings | Activity details (points config, group) | Activities | `program_id` and `event_identifier` = `event_secondary_identifier` |
+| Redemptions | What they bought | Products | `history_id` and `program_id` |
+| Rewards | Alternate reward info | Reward Alternatives | `member_reward_id` |
+| Events | Whether it earned or not | Earnings | `history_id` and `program_id` |
+| Any history file | Member's current balance | Members | `member_id` and `member_program_id` |
+| Activity Groups | The individual activities | Activities | `program_id` and `event_group_id` |
+| Programs | Their activity groups | Activity Groups | `program_id` |
+
+---
+
+## Report Queries
+
+Below are SQL queries ready to copy into your database tool. Each one answers a common reporting question.
+
+### What activities are available and how many points are they worth?
 
 ```sql
 SELECT
@@ -169,94 +151,7 @@ JOIN json_incentives_program_events_lu e
 ORDER BY p.program_name, eg.event_group_name, e.event_description
 ```
 
-### See each member's balance with program name
-
-```sql
-SELECT
-    m.member_id,
-    p.program_name,
-    m.employer_id,
-    m.point_balance          AS current_balance,
-    m.program_points_earned  AS lifetime_earned,
-    m.program_points_redeemed AS lifetime_spent,
-    m.termination_date
-FROM json_programs m
-JOIN json_incentives_program_lu p ON m.program_id = p.program_id
-ORDER BY p.program_name, m.member_id
-```
-
-### See what each member earned
-
-```sql
-SELECT
-    eh.member_id,
-    p.program_name,
-    eh.event_description     AS activity,
-    CAST(eh.reward AS INT)   AS points,
-    eh.event_timestamp       AS activity_date,
-    eh.incentives_timestamp  AS awarded_date
-FROM json_earned_history eh
-JOIN json_incentives_program_lu p ON eh.program_id = p.program_id
-ORDER BY eh.member_id, eh.event_timestamp
-```
-
-### See what members redeemed for
-
-```sql
-SELECT
-    rh.member_id,
-    rh.redemption_date,
-    rh.points_redeemed,
-    rp.product_name,
-    rp.reward_type,
-    rp.total AS dollar_value
-FROM json_redemption_history rh
-JOIN json_redemption_history_product rp
-    ON rh.history_id = rp.history_id
-    AND rh.program_id = rp.program_id
-ORDER BY rh.redemption_date DESC
-```
-
-### Build a complete point history for any member
-
-```sql
-SELECT member_id, incentives_timestamp,
-       'Earned' AS transaction, CAST(reward AS INT) AS points, event_description AS details
-FROM json_earned_history
-UNION ALL
-SELECT member_id, incentives_timestamp,
-       'Redeemed', -1 * points_redeemed, 'Marketplace Redemption'
-FROM json_redemption_history
-UNION ALL
-SELECT member_id, incentives_timestamp,
-       'Expired', -1 * points_expired, 'Points Expired'
-FROM json_expiration_history
-UNION ALL
-SELECT member_id, incentives_timestamp,
-       'Adjustment', points_adjusted, description
-FROM json_manual_adjustment_history
-ORDER BY member_id, incentives_timestamp
-```
-
-### Find events that didn't earn
-
-```sql
-SELECT
-    ev.member_id,
-    ev.event_description,
-    ev.event_timestamp
-FROM json_event_history ev
-LEFT JOIN json_earned_history eh
-    ON ev.history_id = eh.history_id
-    AND ev.program_id = eh.program_id
-WHERE eh.history_id IS NULL
-```
-
----
-
-## Report Examples
-
-### Program enrollment summary
+### How many members are enrolled and what are their balances?
 
 ```sql
 SELECT
@@ -265,6 +160,7 @@ SELECT
     COUNT(DISTINCT CASE WHEN m.termination_date IS NULL THEN m.member_id END) AS active,
     COUNT(DISTINCT CASE WHEN m.termination_date IS NOT NULL THEN m.member_id END) AS terminated,
     SUM(m.program_points_earned) AS total_points_earned,
+    SUM(m.point_balance) AS total_unredeemed,
     AVG(m.point_balance) AS avg_balance
 FROM json_programs m
 JOIN json_incentives_program_lu p ON m.program_id = p.program_id
@@ -272,7 +168,7 @@ GROUP BY p.program_name
 ORDER BY total_enrolled DESC
 ```
 
-### Most popular activities
+### Which activities are most popular?
 
 ```sql
 SELECT
@@ -285,7 +181,7 @@ GROUP BY eh.event_description
 ORDER BY unique_members DESC
 ```
 
-### Monthly engagement trend
+### Are members staying engaged over time? (Monthly trend)
 
 ```sql
 SELECT
@@ -297,13 +193,13 @@ GROUP BY LEFT(eh.incentives_timestamp, 7)
 ORDER BY month
 ```
 
-### Earning rate by employer group
+### How do different employer groups compare?
 
 ```sql
 SELECT
     m.employer_id,
     COUNT(DISTINCT m.member_id) AS enrolled,
-    COUNT(DISTINCT CASE WHEN m.program_points_earned > 0 THEN m.member_id END) AS earners,
+    COUNT(DISTINCT CASE WHEN m.program_points_earned > 0 THEN m.member_id END) AS earned_something,
     ROUND(
         COUNT(DISTINCT CASE WHEN m.program_points_earned > 0 THEN m.member_id END) * 100.0
         / NULLIF(COUNT(DISTINCT m.member_id), 0), 1
@@ -314,22 +210,7 @@ GROUP BY m.employer_id
 ORDER BY enrolled DESC
 ```
 
-### Points liability (unredeemed balance)
-
-```sql
-SELECT
-    p.program_name,
-    COUNT(DISTINCT m.member_id) AS members_with_balance,
-    SUM(m.point_balance) AS unredeemed_points,
-    SUM(m.point_balance) * p.point_monetary_value AS dollar_value
-FROM json_programs m
-JOIN json_incentives_program_lu p ON m.program_id = p.program_id
-WHERE m.point_balance > 0 AND m.termination_date IS NULL
-GROUP BY p.program_name, p.point_monetary_value
-ORDER BY unredeemed_points DESC
-```
-
-### Most popular redemption products
+### What are members redeeming for?
 
 ```sql
 SELECT
@@ -340,12 +221,28 @@ SELECT
     SUM(rp.total) AS dollar_value
 FROM json_redemption_history rh
 JOIN json_redemption_history_product rp
-    ON rh.history_id = rp.history_id AND rh.program_id = rp.program_id
+    ON rh.history_id = rp.history_id
+    AND rh.program_id = rp.program_id
 GROUP BY rp.product_name, rp.reward_type
 ORDER BY points_spent DESC
 ```
 
-### Member engagement segments
+### How many points are unredeemed? (Financial liability)
+
+```sql
+SELECT
+    p.program_name,
+    COUNT(DISTINCT m.member_id) AS members_with_balance,
+    SUM(m.point_balance) AS unredeemed_points,
+    SUM(m.point_balance) * p.point_monetary_value AS estimated_dollar_value
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+WHERE m.point_balance > 0 AND m.termination_date IS NULL
+GROUP BY p.program_name, p.point_monetary_value
+ORDER BY unredeemed_points DESC
+```
+
+### How engaged are members? (Segmentation)
 
 ```sql
 SELECT
@@ -371,7 +268,28 @@ GROUP BY
 ORDER BY engagement_tier
 ```
 
-### Expirations by month
+### Complete point history for a member
+
+```sql
+SELECT member_id, incentives_timestamp,
+       'Earned' AS transaction, CAST(reward AS INT) AS points, event_description AS details
+FROM json_earned_history
+UNION ALL
+SELECT member_id, incentives_timestamp,
+       'Redeemed', -1 * points_redeemed, 'Marketplace Redemption'
+FROM json_redemption_history
+UNION ALL
+SELECT member_id, incentives_timestamp,
+       'Expired', -1 * points_expired, 'Points Expired'
+FROM json_expiration_history
+UNION ALL
+SELECT member_id, incentives_timestamp,
+       'Adjustment', points_adjusted, description
+FROM json_manual_adjustment_history
+ORDER BY member_id, incentives_timestamp
+```
+
+### How many points are expiring? (Monthly)
 
 ```sql
 SELECT
@@ -383,7 +301,7 @@ GROUP BY LEFT(ex.expiration_date, 7)
 ORDER BY month
 ```
 
-### Manual adjustment audit
+### What manual adjustments have been made?
 
 ```sql
 SELECT
@@ -398,8 +316,6 @@ ORDER BY ABS(SUM(ma.points_adjusted)) DESC
 
 ---
 
-## Next Steps
+## Questions?
 
-- **Full column reference** — See [column_reference.md](column_reference.md) for every field in every file
-- **20 detailed queries** — See [sql/example_queries.sql](../sql/example_queries.sql) for production-ready SQL with extensive comments
-- **Questions?** — Contact your Sharecare Client Reporting team representative
+Contact your Sharecare Client Reporting team representative. For the full column-by-column field listing, see [column_reference.md](column_reference.md).
