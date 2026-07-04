@@ -349,6 +349,179 @@ GROUP BY ma.description
 ORDER BY ABS(SUM(ma.points_adjusted)) DESC
 ```
 
+### Which members have never earned anything?
+
+```sql
+SELECT
+    m.member_id,
+    m.employer_id,
+    p.program_name,
+    m.last_updated_date AS enrolled_since
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+WHERE m.program_points_earned = 0
+  AND m.termination_date IS NULL
+ORDER BY m.employer_id, m.member_id
+```
+
+### Top 50 earners
+
+```sql
+SELECT
+    m.member_id,
+    p.program_name,
+    m.program_points_earned AS lifetime_earned,
+    m.program_points_redeemed AS lifetime_redeemed,
+    m.point_balance AS current_balance,
+    p.max_points AS program_max
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+WHERE m.program_points_earned > 0
+ORDER BY m.program_points_earned DESC
+LIMIT 50
+```
+
+### Activity completion count per member
+
+How many different activities has each member completed?
+
+```sql
+SELECT
+    eh.member_id,
+    p.program_name,
+    COUNT(DISTINCT eh.event_description) AS unique_activities_completed,
+    COUNT(*) AS total_earning_events,
+    SUM(CAST(eh.reward AS INT)) AS total_points
+FROM json_earned_history eh
+JOIN json_incentives_program_lu p ON eh.program_id = p.program_id
+GROUP BY eh.member_id, p.program_name
+ORDER BY unique_activities_completed DESC
+```
+
+### Members who earned but never redeemed
+
+```sql
+SELECT
+    m.member_id,
+    p.program_name,
+    m.program_points_earned,
+    m.point_balance
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+WHERE m.program_points_earned > 0
+  AND m.program_points_redeemed = 0
+  AND m.termination_date IS NULL
+ORDER BY m.point_balance DESC
+```
+
+### Earning activity by quarter
+
+```sql
+SELECT
+    LEFT(eh.incentives_timestamp, 4) AS year,
+    CASE
+        WHEN CAST(SUBSTRING(eh.incentives_timestamp, 6, 2) AS INT) BETWEEN 1 AND 3 THEN 'Q1'
+        WHEN CAST(SUBSTRING(eh.incentives_timestamp, 6, 2) AS INT) BETWEEN 4 AND 6 THEN 'Q2'
+        WHEN CAST(SUBSTRING(eh.incentives_timestamp, 6, 2) AS INT) BETWEEN 7 AND 9 THEN 'Q3'
+        ELSE 'Q4'
+    END AS quarter,
+    COUNT(DISTINCT eh.member_id) AS active_earners,
+    SUM(CAST(eh.reward AS INT)) AS total_points,
+    COUNT(*) AS earning_events
+FROM json_earned_history eh
+GROUP BY 1, 2
+ORDER BY year, quarter
+```
+
+### Members who maxed out the program
+
+```sql
+SELECT
+    m.member_id,
+    p.program_name,
+    m.program_points_earned,
+    p.max_points,
+    m.point_balance
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+WHERE m.program_points_earned >= p.max_points
+  AND p.max_points > 0
+ORDER BY p.program_name, m.member_id
+```
+
+### Average points per activity (which activities are worth the most?)
+
+```sql
+SELECT
+    eh.event_description AS activity,
+    COUNT(*) AS times_completed,
+    AVG(CAST(eh.reward AS INT)) AS avg_points_per_completion,
+    MIN(CAST(eh.reward AS INT)) AS min_points,
+    MAX(CAST(eh.reward AS INT)) AS max_points
+FROM json_earned_history eh
+GROUP BY eh.event_description
+ORDER BY avg_points_per_completion DESC
+```
+
+### Redemption frequency — how often do members redeem?
+
+```sql
+SELECT
+    rh.member_id,
+    p.program_name,
+    COUNT(*) AS total_redemptions,
+    SUM(rh.points_redeemed) AS total_points_spent,
+    MIN(rh.redemption_date) AS first_redemption,
+    MAX(rh.redemption_date) AS last_redemption
+FROM json_redemption_history rh
+JOIN json_incentives_program_lu p ON rh.program_id = p.program_id
+GROUP BY rh.member_id, p.program_name
+HAVING COUNT(*) > 1
+ORDER BY total_redemptions DESC
+```
+
+### Year-over-year comparison
+
+```sql
+SELECT
+    p.program_name,
+    eh.event_description AS activity,
+    COUNT(DISTINCT CASE WHEN LEFT(eh.incentives_timestamp,4) = '2025' THEN eh.member_id END) AS members_2025,
+    SUM(CASE WHEN LEFT(eh.incentives_timestamp,4) = '2025' THEN CAST(eh.reward AS INT) ELSE 0 END) AS points_2025,
+    COUNT(DISTINCT CASE WHEN LEFT(eh.incentives_timestamp,4) = '2026' THEN eh.member_id END) AS members_2026,
+    SUM(CASE WHEN LEFT(eh.incentives_timestamp,4) = '2026' THEN CAST(eh.reward AS INT) ELSE 0 END) AS points_2026
+FROM json_earned_history eh
+JOIN json_incentives_program_lu p ON eh.program_id = p.program_id
+WHERE LEFT(eh.incentives_timestamp,4) IN ('2025','2026')
+GROUP BY p.program_name, eh.event_description
+ORDER BY p.program_name, points_2026 DESC
+```
+
+### Program summary dashboard (one row per program with all key metrics)
+
+```sql
+SELECT
+    p.program_name,
+    p.start_date,
+    p.end_date,
+    p.max_points,
+    COUNT(DISTINCT m.member_id) AS total_members,
+    COUNT(DISTINCT CASE WHEN m.termination_date IS NULL THEN m.member_id END) AS active_members,
+    COUNT(DISTINCT CASE WHEN m.program_points_earned > 0 THEN m.member_id END) AS members_who_earned,
+    SUM(m.program_points_earned) AS total_points_earned,
+    SUM(m.program_points_redeemed) AS total_points_redeemed,
+    SUM(m.program_points_expired) AS total_points_expired,
+    SUM(m.point_balance) AS total_unredeemed_balance,
+    ROUND(
+        COUNT(DISTINCT CASE WHEN m.program_points_earned > 0 THEN m.member_id END) * 100.0
+        / NULLIF(COUNT(DISTINCT m.member_id), 0), 1
+    ) AS earning_rate_pct
+FROM json_programs m
+JOIN json_incentives_program_lu p ON m.program_id = p.program_id
+GROUP BY p.program_name, p.start_date, p.end_date, p.max_points
+ORDER BY total_members DESC
+```
+
 ---
 
 ## Questions?
