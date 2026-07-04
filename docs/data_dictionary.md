@@ -1,137 +1,176 @@
 # Blue Rewards Incentive Data Guide
 
-This guide explains the 13 data files you receive for Blue Rewards incentive reporting. It's written so you can understand the data without needing to read SQL first.
+This guide explains the 13 data files you receive for Blue Rewards incentive reporting.
 
-For SQL examples, skip to [Report Queries](#report-queries) at the bottom, or open the dedicated **[example_queries.sql](../sql/example_queries.sql)** file (20 queries with full comments).
+**New to this data? Start here:**
+1. Read [What You're Getting](#what-youre-getting) to learn what each file is
+2. Read [How They Fit Together](#how-they-fit-together) to see how files relate
+3. Jump to [Report Queries](#report-queries) to run your first report
 
-For a column-by-column reference, see **[column_reference.md](column_reference.md)**.
+**Already familiar?**
+- [Column Reference](column_reference.md) — Every column in every file
+- [example_queries.sql](../sql/example_queries.sql) — 20 production-ready queries with detailed comments
 
 ---
 
 ## What You're Getting
 
-You receive 13 files. Each file is a table of data. Together, they tell you everything about your incentive program: what's configured, who's enrolled, what members earned, what they spent, and what expired.
+You receive 13 files organized into four groups. Here's what each one is:
 
-We'll refer to them by short names throughout this guide:
+### Program Setup
+
+These three files define your program — what activities are available and how many points each is worth. They don't contain member-level data.
 
 | Short Name | Full File Name | What It Is |
 |-----------|---------------|-----------|
-| **Programs** | json_incentives_program_lu | Your incentive programs — names, dates, point limits |
-| **Activity Groups** | json_incentives_program_event_group_lu | Groupings of related activities (e.g., "Preventive Screening", "Coaching") |
-| **Activities** | json_incentives_program_events_lu | Each specific activity a member can do to earn points |
-| **Members** | json_programs | Who is enrolled, their balance, and lifetime totals |
-| **Activation Flag** | json_ag_incentives | Simple yes/no: are incentives turned on for this member? |
-| **Earnings** | json_earned_history | Every time points were awarded to a member |
-| **Events** | json_event_history | Every activity signal received (even if it didn't result in points) |
-| **Redemptions** | json_redemption_history | Every time a member spent points |
-| **Products** | json_redemption_history_product | What they bought when they redeemed (gift cards, etc.) |
-| **Expirations** | json_expiration_history | Points that expired |
-| **Adjustments** | json_manual_adjustment_history | Manual corrections made by an administrator |
-| **Rewards** | json_reward_points | Detailed reward records with dates and triggering activity |
-| **Reward Alternatives** | json_reward_alternative | Non-point rewards (co-pay reductions, premium discounts) |
+| **Programs** | json_incentives_program_lu | Your incentive programs (name, date range, max points a member can earn) |
+| **Activity Groups** | json_incentives_program_event_group_lu | Sections within a program that group related activities together |
+| **Activities** | json_incentives_program_events_lu | The specific things a member can do to earn points |
+
+**Example:** The program "Blue Rewards 2026" contains the activity group "Preventive Care," which contains the activity "Complete a Health Screening" worth 600 points.
+
+### Member Enrollment
+
+| Short Name | Full File Name | What It Is |
+|-----------|---------------|-----------|
+| **Members** | json_programs | Who is enrolled in which program, their current point balance, and lifetime totals |
+| **Activation Flag** | json_ag_incentives | Whether incentives are turned on for a member (yes/no). Members with "false" won't earn. |
+
+### Transaction History
+
+These five files log every time something happens to a member's points. Each row is one transaction.
+
+| Short Name | Full File Name | What It Is |
+|-----------|---------------|-----------|
+| **Earnings** | json_earned_history | Points awarded — the member completed an activity |
+| **Events** | json_event_history | Activity signals received by the system, including ones that *didn't* earn (useful for troubleshooting) |
+| **Redemptions** | json_redemption_history | Points spent by the member |
+| **Expirations** | json_expiration_history | Points that expired because they weren't used in time |
+| **Adjustments** | json_manual_adjustment_history | Points added or removed by an admin, with a reason |
+
+### Reward Details
+
+| Short Name | Full File Name | What It Is |
+|-----------|---------------|-----------|
+| **Products** | json_redemption_history_product | What the member actually bought with their points (gift card name, dollar amount, etc.) |
+| **Rewards** | json_reward_points | Detailed record of each reward earned, with dates and the triggering activity |
+| **Reward Alternatives** | json_reward_alternative | Non-point rewards like specialist co-pay reductions or premium discounts |
 
 ---
 
 ## How They Fit Together
 
-The files form a simple hierarchy:
+Think of it like a restaurant menu:
 
-**A Program contains Activity Groups, which contain Activities.**
+- The **Program** is the restaurant
+- **Activity Groups** are the menu sections (Appetizers, Entrees, Desserts)
+- **Activities** are the individual items you can order
 
-Think of your Blue Rewards program like a menu. The menu (Programs) has sections (Activity Groups) like "Preventive Care" or "Wellness." Each section has items (Activities) like "Complete a Health Screening" worth 500 points.
+When a member "orders" (completes an activity), it creates an **Earning**. They accumulate points in their balance (**Members** file). Eventually they "cash out" by redeeming points for gift cards or other rewards (**Redemptions** + **Products**).
 
-**Members enroll in a Program.** Once enrolled, they complete Activities, which creates Earnings. They can then spend those points (Redemptions) on gift cards or other products (Products). Points they don't spend may eventually Expire.
+### How to Connect Any Two Files
 
-**The one field that connects everything is `program_id`.** Every file has it. That's how you join any two files together.
+Every file has a column called `program_id`. That's the key that links them all together.
 
-To narrow down to one person, add `member_id`. To narrow to one person in one specific program, use both `member_id` and `member_program_id`.
+Here's a simple example of how you'd connect the most common files:
 
----
-
-## Understanding the Key Files
-
-### Members (json_programs) — Your Starting Point
-
-This is usually where you'll start. Each row is one member enrolled in one program. Key columns:
-
-- **point_balance** — What they have right now
-- **program_points_earned** — Everything they've ever earned
-- **program_points_redeemed** — Everything they've ever spent
-- **program_points_expired** — Everything that expired
-- **termination_date** — If blank, they're still active. If filled, they've been removed.
-- **employer_id** — Their employer group (useful for breaking out reports)
-
-**How the balance works:**
 ```
-Current Balance = Earned − Redeemed − Expired + Adjustments
+Members  ──── program_id ────→  Programs         (to get the program name)
+Earnings ──── program_id ────→  Programs         (to get the program name)
+Redemptions ─ history_id ───→  Products          (to see what they bought)
+Events ────── history_id ───→  Earnings          (to check if it earned)
 ```
 
-### Earnings (json_earned_history) — What Members Did
+When you want to narrow down to **one member**, filter or join on `member_id`.
 
-Each row is one time a member earned points. Key columns:
-
-- **event_description** — The activity name (e.g., "Complete a Preventive Screening")
-- **reward** — How many points they got (note: stored as text, cast to number for math)
-- **event_timestamp** — When the member did the activity
-- **incentives_timestamp** — When the system awarded the points (may be slightly later)
-
-### Events (json_event_history) — Including Things That Didn't Earn
-
-Similar to Earnings, but includes activities that were received by the system but **did not** result in points. Why would something not earn?
-
-- Member already maxed out that activity
-- A prerequisite wasn't completed yet (see "Gating" below)
-- It was a duplicate within the cooldown window
-- The activity happened outside the program's date range
-- The member was terminated
-
-**How to find what didn't earn:** Compare Events to Earnings using `history_id`. If an event's `history_id` has no match in Earnings, it didn't result in points.
-
-### Redemptions + Products — What They Spent On
-
-**Redemptions** shows each time a member spent points. **Products** shows what they actually got (e.g., a $25 Amazon gift card). Connect them using `history_id` + `program_id`. One redemption can have multiple products.
-
-### Expirations — Points Lost to Time
-
-Each row is points that expired because the member didn't use them within the allowed window. The `expiration_date` tells you when, and `points_expired` tells you how many.
-
-### Adjustments — Manual Corrections
-
-Admin corrections — points added or removed manually. The `description` column explains why (e.g., "Refund - IRS3227" or "Manual points for RealAge re-take activity"). Use this to reconcile balances that don't add up from Earnings/Redemptions/Expirations alone.
+When you want to narrow to **one member in one specific program**, use both `member_id` and `member_program_id`.
 
 ---
 
-## Gating (Prerequisites)
+## Key Things to Know
 
-Some activity groups are locked until a member completes a different group first. For example:
+### How the Point Balance Works
 
-> "Health Coaching" rewards are **locked** until the member completes "HSA Agreement"
+The `point_balance` field in the Members file equals:
 
-You'll see this in the Activity Groups file — the `locks` column names the prerequisite group. If it's blank, there's no prerequisite.
+> **Earned − Redeemed − Expired + Adjustments = Current Balance**
+
+If the math doesn't add up, look at the Adjustments file for manual corrections.
+
+### Two Types of Timestamps
+
+Every transaction has two dates:
+
+| Column | What It Means | Use It When... |
+|--------|--------------|----------------|
+| event_timestamp | When the member actually did the activity | You want "when did members do this?" |
+| incentives_timestamp | When the system processed it and awarded points | You want "when were points given?" |
+
+They're usually close (same day), but can differ by hours or days.
+
+### Why Would an Activity Not Earn Points?
+
+Not every activity results in points. The **Events** file shows everything the system received. The **Earnings** file shows only what actually earned. Common reasons for no earning:
+
+- Member already hit the maximum for that activity
+- A prerequisite group wasn't completed yet (see below)
+- Same activity repeated too quickly (within the cooldown window)
+- Activity happened outside the program's date range
+- Member was terminated from the program
+
+### Prerequisites ("Locks")
+
+Some activity groups require another group to be completed first. In the Activity Groups file, the `locks` column shows the prerequisite. For example, "Health Coaching" might require "HSA Agreement" to be completed first. If `locks` is blank, there's no prerequisite.
+
+### Reward Alternatives
+
+Most members earn points. But some programs also offer non-point rewards — for example, a $5 reduction on specialist co-pays. These appear in the **Reward Alternatives** file alongside the standard reward in the **Rewards** file. Connect them using `member_reward_id`.
+
+### Filtering by Date
+
+Most reports need a date range. Use `incentives_timestamp` for filtering in any of the history files. Example — to limit to 2026 only, add:
+
+```sql
+WHERE LEFT(eh.incentives_timestamp, 4) = '2026'
+```
+
+Or for a specific date range:
+
+```sql
+WHERE eh.incentives_timestamp >= '2026-01-01'
+  AND eh.incentives_timestamp < '2027-01-01'
+```
+
+### Data Format Notes
+
+| What | Format | Example | How to Use |
+|------|--------|---------|-----------|
+| Dates | Text | `2026-03-15 14:30:00` | Cast for date math: `CAST(column AS DATE)` |
+| IDs | Text (hex) | `5c6da3e075e97168ade8e7c2` | Always match exactly as text |
+| member_id | Numeric text | `1000352` | Can compare as text or cast to number |
+| reward (points earned) | Text | `500` | Cast to number for sums: `CAST(reward AS INT)` |
 
 ---
 
-## Connecting Files Together
-
-Here's a plain-English guide to which files you join and what field you use:
+## Connecting Files: Quick Reference
 
 | I'm looking at... | I want to add... | Join to... | Match on... |
 |-------------------|-----------------|-----------|-------------|
-| Members | The program name | Programs | `program_id` |
-| Earnings | The program name | Programs | `program_id` |
-| Earnings | Activity details (points config, group) | Activities | `program_id` and `event_identifier` = `event_secondary_identifier` |
-| Redemptions | What they bought | Products | `history_id` and `program_id` |
-| Rewards | Alternate reward info | Reward Alternatives | `member_reward_id` |
-| Events | Whether it earned or not | Earnings | `history_id` and `program_id` |
-| Any history file | Member's current balance | Members | `member_id` and `member_program_id` |
-| Activity Groups | The individual activities | Activities | `program_id` and `event_group_id` |
-| Programs | Their activity groups | Activity Groups | `program_id` |
+| Members | Program name/details | Programs | `program_id` |
+| Earnings | Program name | Programs | `program_id` |
+| Earnings | Activity config (group name, point value) | Activities | `program_id` + match `event_identifier` to `event_secondary_identifier` |
+| Redemptions | What they bought | Products | `history_id` + `program_id` |
+| Rewards | Alternate reward details | Reward Alternatives | `member_reward_id` |
+| Events | Did it actually earn? | Earnings | `history_id` + `program_id` |
+| Any history file | Member's current balance | Members | `member_id` + `member_program_id` |
+| Programs (config) | Activity Groups in it | Activity Groups | `program_id` |
+| Activity Groups | Activities in that group | Activities | `program_id` + `event_group_id` |
 
 ---
 
 ## Report Queries
 
-Below are SQL queries ready to copy into your database tool. Each one answers a common reporting question.
+Copy these directly into your SQL tool. Each answers a common business question.
 
 ### What activities are available and how many points are they worth?
 
@@ -151,7 +190,7 @@ JOIN json_incentives_program_events_lu e
 ORDER BY p.program_name, eg.event_group_name, e.event_description
 ```
 
-### How many members are enrolled and what are their balances?
+### How many members are enrolled?
 
 ```sql
 SELECT
@@ -181,7 +220,7 @@ GROUP BY eh.event_description
 ORDER BY unique_members DESC
 ```
 
-### Are members staying engaged over time? (Monthly trend)
+### Monthly engagement trend
 
 ```sql
 SELECT
@@ -193,7 +232,7 @@ GROUP BY LEFT(eh.incentives_timestamp, 7)
 ORDER BY month
 ```
 
-### How do different employer groups compare?
+### How do employer groups compare?
 
 ```sql
 SELECT
@@ -210,7 +249,7 @@ GROUP BY m.employer_id
 ORDER BY enrolled DESC
 ```
 
-### What are members redeeming for?
+### What are members spending points on?
 
 ```sql
 SELECT
@@ -242,7 +281,7 @@ GROUP BY p.program_name, p.point_monetary_value
 ORDER BY unredeemed_points DESC
 ```
 
-### How engaged are members? (Segmentation)
+### Member engagement segments
 
 ```sql
 SELECT
@@ -268,7 +307,9 @@ GROUP BY
 ORDER BY engagement_tier
 ```
 
-### Complete point history for a member
+### Complete point history for one member
+
+Add `WHERE member_id = '<id>'` to limit to one person.
 
 ```sql
 SELECT member_id, incentives_timestamp,
@@ -289,7 +330,7 @@ FROM json_manual_adjustment_history
 ORDER BY member_id, incentives_timestamp
 ```
 
-### How many points are expiring? (Monthly)
+### Monthly expirations
 
 ```sql
 SELECT
@@ -301,7 +342,7 @@ GROUP BY LEFT(ex.expiration_date, 7)
 ORDER BY month
 ```
 
-### What manual adjustments have been made?
+### Manual adjustment audit
 
 ```sql
 SELECT
@@ -318,4 +359,8 @@ ORDER BY ABS(SUM(ma.points_adjusted)) DESC
 
 ## Questions?
 
-Contact your Sharecare Client Reporting team representative. For the full column-by-column field listing, see [column_reference.md](column_reference.md).
+Contact your Sharecare Client Reporting team representative.
+
+**Additional resources:**
+- [Column Reference](column_reference.md) — Every column in every file with descriptions
+- [example_queries.sql](../sql/example_queries.sql) — 20 queries with extensive inline comments
