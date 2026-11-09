@@ -985,3 +985,50 @@ ORDER BY p.program_name,
         WHEN 'Low' THEN 3
         WHEN 'Inactive' THEN 4
     END;
+
+
+-- ============================================================================
+-- QUERY 21: PROGRAM COMPLETION (MEMBERS WHO REACHED THE MAX)
+-- ============================================================================
+-- What it does:
+--   There is no "completed" flag in the data. This query keeps a running
+--   total of each member's earnings per program and returns the first
+--   earning that brings the total to the program's max_points. That
+--   timestamp is the completion date.
+--
+-- Use this to:
+--   - List members who completed a program and when
+--   - Report completions by month or quarter
+--   - Compare completion timing across programs
+--
+-- Notes:
+--   - Programs with max_points = 0 (no cap) are excluded.
+--   - Activity-level caps (json_incentives_program_events_lu.max_points)
+--     are separate and are not checked here.
+--   - Manual adjustments are not included in the running total.
+-- ============================================================================
+SELECT
+    member_id,
+    program_name,
+    max_points,
+    MIN(incentives_timestamp)           AS completion_timestamp
+FROM (
+    SELECT
+        eh.member_id,
+        eh.program_id,
+        p.program_name,
+        p.max_points,
+        eh.incentives_timestamp,
+        SUM(CAST(eh.reward AS INT)) OVER (
+            PARTITION BY eh.member_id, eh.program_id
+            ORDER BY eh.incentives_timestamp
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        )                               AS running_points
+    FROM json_earned_history eh
+    JOIN json_incentives_program_lu p
+        ON eh.program_id = p.program_id
+    WHERE p.max_points > 0
+) t
+WHERE running_points >= max_points
+GROUP BY member_id, program_name, max_points
+ORDER BY completion_timestamp;

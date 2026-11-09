@@ -9,7 +9,7 @@ Documentation and example SQL queries for the 13 incentive-related JSON data fil
 | Path | Description |
 |------|-------------|
 | [docs/data_dictionary.md](docs/data_dictionary.md) | Full data dictionary — file descriptions, join keys, example queries, key concepts, and complete column definitions for all 13 files |
-| [sql/example_queries.sql](sql/example_queries.sql) | 20 ready-to-use SQL queries with detailed comments explaining logic, joins, and how to adapt for reporting |
+| [sql/example_queries.sql](sql/example_queries.sql) | 21 ready-to-use SQL queries with detailed comments explaining logic, joins, and how to adapt for reporting |
 
 ---
 
@@ -72,6 +72,7 @@ Documentation and example SQL queries for the 13 incentive-related JSON data fil
 | 18 | Expiration Risk Report | Points lost over time |
 | 19 | Year-Over-Year Comparison | YoY growth/decline |
 | 20 | Member Engagement Segmentation | Power User / Active / Low / Inactive |
+| 21 | Program Completion | Members who reached max points, with completion date |
 
 ---
 

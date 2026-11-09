@@ -9,7 +9,7 @@ This guide explains the 13 data files you receive for Blue Rewards incentive rep
 
 **Already familiar?**
 - [Column Reference](column_reference.md) — Every column in every file
-- [example_queries.sql](../sql/example_queries.sql) — 20 production-ready queries with detailed comments
+- [example_queries.sql](../sql/example_queries.sql) — 21 production-ready queries with detailed comments
 
 ---
 
@@ -185,7 +185,7 @@ WHERE eh.incentives_timestamp >= '2026-01-01'
 
 ## Report Queries
 
-These SQL queries are ready to copy into your database tool. Modify the date filters, column lists, or groupings to fit your needs. For 20 additional queries with detailed explanations, see [example_queries.sql](../sql/example_queries.sql).
+These SQL queries are ready to copy into your database tool. Modify the date filters, column lists, or groupings to fit your needs. For 21 additional queries with detailed explanations, see [example_queries.sql](../sql/example_queries.sql).
 
 ### What activities are available and how many points are they worth?
 
@@ -582,4 +582,4 @@ Contact your Sharecare Client Reporting team representative.
 
 **Additional resources:**
 - [Column Reference](column_reference.md) — Every column in every file with descriptions
-- [example_queries.sql](../sql/example_queries.sql) — 20 queries with extensive inline comments
+- [example_queries.sql](../sql/example_queries.sql) — 21 queries with extensive inline comments
