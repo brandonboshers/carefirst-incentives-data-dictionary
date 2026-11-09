@@ -120,6 +120,27 @@ They're usually the same day, but can differ by hours or days due to processing 
 
 **Some programs offer non-point rewards in addition to (or instead of) points.** For example, a $5 reduction on specialist co-pays. These appear in the Reward Alternatives file. Connect them to the Rewards file using `member_reward_id` to see both the standard and alternate reward on one row.
 
+### Program Completion (Reaching the Maximum Points)
+
+**There is no "completed" flag in any of the 13 files.** A member has completed a program when the points they have earned reach the program's cap. You work this out by comparing two columns:
+
+| Column | File | What It Means |
+|--------|------|--------------|
+| `program_points_earned` | Members (json_programs) | Lifetime points the member has earned in that program |
+| `max_points` | Programs (json_incentives_program_lu) | The most a member can earn in that program |
+
+A member is complete when `program_points_earned >= max_points` (and `max_points > 0`, since a value of 0 means no cap is configured). See [Members who maxed out the program](#members-who-maxed-out-the-program) for the query.
+
+**Things to keep in mind:**
+
+- **Activity caps are separate.** The Activities file (json_incentives_program_events_lu) has its own `max_points` per activity. A member can hit an activity cap without completing the program.
+- **Points over the cap are not awarded.** Once a member is at the cap, further activity shows up in Events but not in Earnings (see [Why Would an Activity Not Earn Points?](#why-would-an-activity-not-earn-points)). Events alone can't tell you the reason, so compare to the member's total.
+- **Earned is not balance.** Use `program_points_earned`, not `point_balance`. Redeemed and expired points lower the balance but not the points earned.
+- **Over-cap values are a data quality flag.** `program_points_earned` greater than `max_points` should not happen. Example Query 12 (Top Earners) labels these rows `OVER MAX`.
+- **Completion date must be calculated.** No file stores it. Take a running total of Earnings by `incentives_timestamp` and find the first row where it reaches `max_points`. See [When did a member reach the maximum?](#when-did-a-member-reach-the-maximum)
+- **Manual adjustments are not in the earned total.** Check the Adjustments file if a member's numbers look off.
+- **Engagement tiers are not completion.** Example Query 20 (Member Engagement Segmentation) treats 75% or more of the cap as "Power User". That includes members who haven't reached 100%.
+
 ### Filtering by Date
 
 Most reports need a date range. Use `incentives_timestamp` for filtering in any of the history files. Example — to limit to 2026 only, add:
@@ -447,6 +468,37 @@ JOIN json_incentives_program_lu p ON m.program_id = p.program_id
 WHERE m.program_points_earned >= p.max_points
   AND p.max_points > 0
 ORDER BY p.program_name, m.member_id
+```
+
+### When did a member reach the maximum?
+
+No file stores a completion date, so this keeps a running total of each member's earnings and returns the first earning that brings the total to the program cap.
+
+```sql
+SELECT
+    member_id,
+    program_name,
+    max_points,
+    MIN(incentives_timestamp) AS completion_timestamp
+FROM (
+    SELECT
+        eh.member_id,
+        eh.program_id,
+        p.program_name,
+        p.max_points,
+        eh.incentives_timestamp,
+        SUM(CAST(eh.reward AS INT)) OVER (
+            PARTITION BY eh.member_id, eh.program_id
+            ORDER BY eh.incentives_timestamp
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_points
+    FROM json_earned_history eh
+    JOIN json_incentives_program_lu p ON eh.program_id = p.program_id
+    WHERE p.max_points > 0
+) t
+WHERE running_points >= max_points
+GROUP BY member_id, program_name, max_points
+ORDER BY completion_timestamp
 ```
 
 ### Average points per activity (which activities are worth the most?)
